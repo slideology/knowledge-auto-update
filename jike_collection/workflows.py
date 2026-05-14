@@ -48,7 +48,7 @@ def perform_jike_sync(
     client = JikeClient(settings)
     started_at = utc_now_iso()
     run_mode = "full" if full else "incremental"
-    run_id = db.start_sync_run(started_at, run_mode)
+    run_id = db.start_sync_run(started_at, run_mode, source_type="jike")
 
     inserted = 0
     updated = 0
@@ -100,7 +100,7 @@ def perform_jike_sync(
         removed = 0
         note = ""
         if full:
-            removed = db.mark_missing_items_as_removed(seen_ids)
+            removed = db.mark_missing_items_as_removed(seen_ids, source_type="jike")
             note = "full sync completed"
         elif consecutive_existing >= stale_threshold:
             note = f"stopped early after {consecutive_existing} consecutive existing items"
@@ -161,7 +161,7 @@ def perform_feishu_doc_sync(
     mode: str,
     limit: Optional[int] = None,
 ) -> FeishuDocSummary:
-    rows = db.fetch_unsynced_items(limit=limit)
+    rows = db.fetch_unsynced_items(limit=limit, source_filter="jike")
     attempted = len(rows)
     if attempted == 0:
         return FeishuDocSummary(

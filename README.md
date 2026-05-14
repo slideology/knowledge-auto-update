@@ -1,204 +1,317 @@
-# Jike Collection Knowledge Base
+# Knowledge Auto Update
 
-一个本地工具，用来把你自己的即刻收藏持续同步到 SQLite，并提供：
+一个多信息源个人知识库项目。当前已经接入即刻收藏、AIHOT 公开热点、SQLite 本地知识库、OpenAI 兼容 LLM、飞书日报通知、飞书文档镜像和飞书机器人问答。
 
-- 增量抓取
-- 自动刷新 access token
-- 中文/英文全文搜索
-- 按主题、来源、作者做基础分析
-- 生成 Markdown 报告
-
-整个项目只依赖 Python 标准库，适合长期本地运行。
-
-## 最近进展
-
-最近这轮工作，已经把项目从“本地脚本抓收藏”推进成了一条可持续运行的知识库链路：
-
-- 打通了即刻收藏抓取，支持增量同步、全量校准、详情补抓和 token 自动刷新
-- 建好了本地 SQLite + FTS 搜索，可直接搜索历史收藏正文、作者、主题和链接
-- 增加了 Markdown 分析报告能力，能按时间窗口输出收藏洞察
-- 接入了飞书 OAuth、普通飞书文档写入和群机器人通知
-- 新增了 `run-daily`、`feishu-backfill`、`feishu-sync-doc` 等命令
-- 补上了通知链路，现在 `feishu-backfill`、`feishu-sync-doc`、`run-daily` 跑完都会自动发飞书群通知
+当前架构里，**SQLite + KB chunks/embeddings 是事实源和问答主链路**；飞书文档只是方便人工浏览的镜像，不承担检索问答主链路。
 
 ## 当前状态
 
-截至 2026-03-27，当前项目和数据状态如下：
+截至 `2026-05-14`，本地库当前状态如下：
 
-- Git 状态：本地与远端 `main` 已同步
-- 最近一次即刻同步：`2026-03-20`
-- 即刻收藏总数：`1618`
-- 当前有效收藏：`1618`
-- 图片类收藏：`913`
-- 视频类收藏：`52`
-- 音频类收藏：`9`
-- 飞书文档已写入：`1262`
-- 飞书文档待重试：`356`
-- 最近一次飞书投递：`2026-03-20`，结果为 `partial_failure`
+- 总条目：`2060`
+- 即刻收藏：`1838`
+- AIHOT 条目：`222`
+- KB chunks：`2057`
+- 即刻 chunks：`1835 / 1838`
+- AIHOT chunks：`222 / 222`
+- embeddings：`2056`
+- 飞书文档镜像已同步即刻收藏：`1262`
+- 最新即刻收藏时间：`2026-05-13T06:26:59.483Z`
+- 最新日报：`2026-05-13`，状态 `success`，飞书 webhook 已发送
 
-当前已经创建好的飞书知识库文档：
+已完成能力：
 
-- [即刻收藏知识库](https://feishu.cn/docx/XE1qdRh1soW8DzxPDeGcHiB6nDb)
+- 即刻收藏同步到 SQLite，支持增量、全量、详情补抓和 token 自动刷新。
+- AIHOT 公开 API 接入，支持 selected 流同步和按日报回填。
+- 统一 `items` 表支持 `jike` 与 `aihot` 多源共存。
+- KB chunk / embedding / digest run / delivery run 等本地表结构已经落地。
+- 本地全文搜索支持 `--source jike|aihot|all`。
+- 本地 `ask` 命令支持多源问答路由。
+- 每天 `10:00` 通过本机 `launchd` 自动执行前一天日报。
+- 飞书群 webhook 通知链路可用。
+- 飞书机器人服务入口 `serve-bot` 已接入基础事件处理和消息回复。
+- 飞书文档镜像保留，但不是问答主链路。
 
-## 已知问题
+当前已知限制：
 
-- 飞书普通文档存在单个 block 子节点数量限制，当前回填过程中会命中 `too many children in block`
-- 因为这个限制，历史收藏还没有 100% 全量写入飞书文档，仍有一部分失败记录等待重试
-- 飞书文档接口存在限流，批量回填时需要更细的分片和节流策略
-- 2026-03-20 之后还没有再次执行同步，因此当前库内最新收藏时间仍停在 `2026-03-20T07:13:56.685Z`
+- 即刻还有 `3` 条未生成 chunk，`1` 条缺 embedding；最近 `kb-sync` 会以 `partial_failure` 收尾，但大部分问答和日报不受影响。
+- 飞书文档镜像仍保留旧问题：单个 block children 过多时会命中 `too many children in block`。
+- 飞书机器人目前按明文事件回调实现；如果飞书后台启用事件加密，需要补解密支持。
+- 当前 bot 公网回调如果使用 ngrok，地址会变化；长期稳定运行建议改为固定域名或 Cloudflare Worker。
+- 当前还没有正式接入 Twitter / Reddit，但数据模型和 source adapter 已按可扩展方式设计。
 
-## 下一步待办
+## 环境变量
 
-- 优先解决飞书文档的 `too many children in block`，重构文档层级，补齐剩余 `356` 条失败收藏
-- 给飞书回填增加更稳的分片、退避和失败重试策略，降低 `429` 对整批任务的影响
-- 再跑一次即刻同步，确认 `2026-03-20` 之后是否有新增收藏进入本地库
-- 跑通一轮完整的 `run-daily`，验证“即刻增量 -> 飞书写入 -> 群通知”整条链路
-- 接一个稳定的定时调度，让 `run-daily` 每天自动执行
-- 视使用体验补一个本地网页搜索界面，而不只是命令行搜索
-
-## 1. 准备登录态
-
-在你已经登录的即刻网页里打开浏览器控制台，执行：
-
-```js
-localStorage.getItem('JK_ACCESS_TOKEN')
-localStorage.getItem('JK_REFRESH_TOKEN')
-```
-
-把结果填到当前目录的 `.env` 里：
+复制配置模板：
 
 ```bash
 cp .env.example .env
 ```
 
-## 2. 首次同步
+最少需要补：
 
 ```bash
-python3 -m jike_collection sync --full
-```
-
-首次跑完后，程序会把最新 token 缓存在 `data/jike_auth.json`。之后如果 access token 过期，会自动用 refresh token 刷新。
-
-## 3. 搜索自己的收藏
-
-```bash
-python3 -m jike_collection search OpenAI
-python3 -m jike_collection search 浏览器功能
-python3 -m jike_collection search "自动化 agent"
-```
-
-## 4. 生成分析报告
-
-```bash
-python3 -m jike_collection report --days 30
-```
-
-报告会输出到 `reports/` 目录，包含：
-
-- 收藏总量和最近周期统计
-- 高频来源域名
-- 高频主题 / 作者
-- 值得二次整理的候选内容
-- 按主题分组的线索
-
-## 5. 推荐的长期运行方式
-
-日常增量同步：
-
-```bash
-python3 -m jike_collection sync
-```
-
-每周做一次全量校准，顺便清理已取消收藏的条目：
-
-```bash
-python3 -m jike_collection sync --full
-```
-
-你也可以把下面这条命令放进定时任务：
-
-```bash
-python3 -m jike_collection sync && python3 -m jike_collection report --days 30
-```
-
-macOS 上可以用 `launchd`、`crontab`，或者 Codex 自动化来跑。
-
-## 6. 飞书集成
-
-### 6.1 准备环境变量
-
-在 `.env` 里补充：
-
-```bash
+JIKE_ACCESS_TOKEN=
+JIKE_REFRESH_TOKEN=
 FEISHU_WEBHOOK_URL=
 FEISHU_APP_ID=
 FEISHU_APP_SECRET=
 FEISHU_REDIRECT_URI=http://127.0.0.1:8787/callback
 ```
 
-### 6.2 一次性做飞书 OAuth 授权
+如果要启用知识库问答、embedding 和摘要增强，再补：
 
 ```bash
-python3 -m jike_collection feishu-auth --open-browser
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=
+LLM_CHAT_MODEL=
+LLM_EMBEDDING_MODEL=
+LLM_TIMEOUT=60
 ```
 
-如果你已经手动拿到了授权 code，也可以：
+如果要启用飞书机器人，再补：
 
 ```bash
-python3 -m jike_collection feishu-auth --code <oauth_code>
+FEISHU_BOT_APP_ID=
+FEISHU_BOT_APP_SECRET=
+FEISHU_EVENT_VERIFY_TOKEN=
+FEISHU_EVENT_ENCRYPT_KEY=
+FEISHU_ALLOWED_OPEN_ID=
+BOT_PUBLIC_BASE_URL=
 ```
 
-### 6.3 首次把历史收藏回填到飞书文档
+## 即刻登录态
+
+在已登录的即刻网页控制台执行：
+
+```js
+localStorage.getItem('JK_ACCESS_TOKEN')
+localStorage.getItem('JK_REFRESH_TOKEN')
+```
+
+把结果写进 `.env`。后续同步会优先使用本地 token 状态文件，并在可用时自动刷新。
+
+## 数据同步
+
+首次同步即刻收藏：
 
 ```bash
-python3 -m jike_collection feishu-backfill
+python3 -m jike_collection sync --full
 ```
 
-首次会自动创建一份普通飞书文档，并把文档状态保存到 `data/feishu_doc_state.json`。
-
-### 6.4 每日增量同步 + 飞书通知
-
-```bash
-python3 -m jike_collection run-daily
-```
-
-这条命令会：
-
-1. 增量同步即刻收藏到 SQLite
-2. 把未同步过的收藏追加到飞书文档
-3. 给飞书群机器人发一条“今日是否有更新”的通知
-
-另外这两条命令现在也会在执行结束后自动发飞书通知：
-
-- `python3 -m jike_collection feishu-backfill`
-- `python3 -m jike_collection feishu-sync-doc`
-
-## 7. 常用命令
+日常增量同步即刻收藏：
 
 ```bash
 python3 -m jike_collection sync
-python3 -m jike_collection sync --full
-python3 -m jike_collection search "MCP"
-python3 -m jike_collection report --days 7
-python3 -m jike_collection stats
-python3 -m jike_collection feishu-auth --open-browser
-python3 -m jike_collection feishu-backfill
-python3 -m jike_collection feishu-sync-doc
+```
+
+同步 AIHOT 公开流：
+
+```bash
+python3 -m jike_collection aihot-sync --days 2
+```
+
+回填 AIHOT 近几天日报：
+
+```bash
+python3 -m jike_collection aihot-sync --backfill-days 7
+```
+
+## 知识库索引
+
+配置好 LLM 后，首次全量索引：
+
+```bash
+python3 -m jike_collection kb-reindex --source all
+```
+
+之后日常只需要增量：
+
+```bash
+python3 -m jike_collection kb-sync --source all
+```
+
+可用 `--source jike|aihot|all` 控制索引范围，调试时可加 `--limit`。
+
+## 搜索和问答
+
+关键词搜索：
+
+```bash
+python3 -m jike_collection search "OpenAI" --source aihot
+python3 -m jike_collection search "浏览器功能" --source jike
+python3 -m jike_collection search "agent" --source all
+```
+
+本地问答：
+
+```bash
+python3 -m jike_collection ask "OpenAI 最近发了什么"
+python3 -m jike_collection ask "我之前收藏过 Claude Code 相关内容吗"
+python3 -m jike_collection ask "我收藏里和最近 AI 热点重合的主题是什么" --source all
+```
+
+如果没有配置 LLM，`ask` 会退回成候选命中列表模式。
+
+## 每日摘要
+
+生成前一天摘要：
+
+```bash
+python3 -m jike_collection digest
+```
+
+生成指定日期摘要：
+
+```bash
+python3 -m jike_collection digest --date 2026-05-13
+```
+
+生成后发送到飞书群：
+
+```bash
+python3 -m jike_collection digest --send
+```
+
+主入口：
+
+```bash
 python3 -m jike_collection run-daily
 ```
 
-## 8. 数据文件
+`run-daily` 会执行：
 
-- SQLite 数据库：`data/jike_collection.db`
-- token 缓存：`data/jike_auth.json`
+1. 即刻增量同步
+2. AIHOT 增量同步
+3. KB 增量索引
+4. 前一天摘要生成
+5. 飞书群通知
+
+如果还要尝试飞书文档镜像：
+
+```bash
+python3 -m jike_collection run-daily --include-doc-sync
+```
+
+## 本机定时任务
+
+项目附带一个 `launchd` 模板：
+
+```text
+deploy/launchd/com.dahuang.knowledge-auto-update.daily.plist
+```
+
+执行脚本：
+
+```text
+scripts/run_daily_digest.sh
+```
+
+默认每天 `10:00` 执行：
+
+```bash
+python3 -m jike_collection run-daily
+```
+
+日志默认写到：
+
+```text
+~/Library/Logs/knowledge-auto-update/
+```
+
+## 飞书集成
+
+文档 OAuth 授权：
+
+```bash
+python3 -m jike_collection feishu-auth --open-browser
+```
+
+即刻收藏镜像到飞书文档：
+
+```bash
+python3 -m jike_collection feishu-backfill
+python3 -m jike_collection feishu-sync-doc
+```
+
+这条链路默认只同步 `jike`，不会把 AIHOT 写进飞书文档。
+
+启动飞书机器人：
+
+```bash
+python3 -m jike_collection serve-bot --host 0.0.0.0 --port 8788
+```
+
+健康检查：
+
+```bash
+curl -s http://127.0.0.1:8788/healthz
+```
+
+飞书开放平台事件回调地址：
+
+```text
+POST {BOT_PUBLIC_BASE_URL}/feishu/events
+```
+
+机器人默认只响应 `.env` 里的 `FEISHU_ALLOWED_OPEN_ID`。
+
+## 常用命令
+
+```bash
+python3 -m jike_collection --help
+python3 -m jike_collection stats
+python3 -m jike_collection sync
+python3 -m jike_collection sync --full
+python3 -m jike_collection aihot-sync --days 2
+python3 -m jike_collection aihot-sync --backfill-days 7
+python3 -m jike_collection kb-sync --source all
+python3 -m jike_collection kb-reindex --source all
+python3 -m jike_collection search "OpenAI" --source all
+python3 -m jike_collection ask "OpenAI 最近发了什么"
+python3 -m jike_collection digest --send
+python3 -m jike_collection serve-bot
+python3 -m jike_collection run-daily
+```
+
+## 数据文件
+
+- SQLite：`data/jike_collection.db`
+- 即刻 token 缓存：`data/jike_auth.json`
 - 飞书用户 token：`data/feishu_user_token.json`
 - 飞书文档状态：`data/feishu_doc_state.json`
 - Markdown 报告：`reports/`
 
-## 9. 说明
+这些文件默认不提交到 Git。
 
-- 当前实现依赖即刻网页端私有接口 `POST /1.0/collections/list`
-- 这不是公开 API，所以未来如果即刻改接口，抓取逻辑可能需要调整
-- 工具默认只处理“当前登录账号自己的收藏”
-- 飞书文档采用普通文档，不是电子表格
-- 历史收藏写入飞书后默认不因为“取消收藏”而从文档中删除
+## 浏览器约定
+
+需要操作登录态网页时，默认使用 Chrome Canary 的调试端口：
+
+```bash
+curl -s http://127.0.0.1:9444/json/version
+```
+
+不要随意操作用户正在使用的普通 Chrome 窗口。
+
+## 提交前检查
+
+最小检查：
+
+```bash
+python3 -m compileall jike_collection
+python3 -m jike_collection --help
+python3 -m jike_collection stats
+git status --short
+```
+
+如果改了同步、KB、日报或飞书相关逻辑，按影响范围补跑对应命令，优先使用 `--limit` 或指定日期，避免误发通知或大批量写文档。
+
+## 后续待办
+
+- 修掉 KB 索引里残留的 `3` 条 chunk 和 `1` 条 embedding 尾巴。
+- 修飞书文档 `too many children in block`，把剩余即刻收藏镜像补齐。
+- 给飞书机器人补事件加密支持。
+- 将 bot 回调从临时 ngrok 地址迁到固定公网入口。
+- 接入 Twitter / Reddit source adapter。
+- 为外链正文增加可选抓取层。

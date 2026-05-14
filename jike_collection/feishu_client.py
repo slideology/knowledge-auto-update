@@ -23,6 +23,8 @@ class FeishuClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._app_access_token: Optional[str] = None
+        self._tenant_access_token: Optional[str] = None
+        self._tenant_access_token_expires_at: float = 0
 
     def _token_path(self) -> Path:
         return self.settings.feishu_user_token_path
@@ -121,6 +123,28 @@ class FeishuClient:
         self._app_access_token = token
         return token
 
+    def get_tenant_access_token(self) -> str:
+        if self._tenant_access_token and self._tenant_access_token_expires_at - 60 > time.time():
+            return self._tenant_access_token
+        if not self.settings.feishu_bot_app_id or not self.settings.feishu_bot_app_secret:
+            raise FeishuApiError("缺少 FEISHU_BOT_APP_ID 或 FEISHU_BOT_APP_SECRET")
+
+        data = self._request_json(
+            "POST",
+            "/auth/v3/tenant_access_token/internal/",
+            payload={
+                "app_id": self.settings.feishu_bot_app_id,
+                "app_secret": self.settings.feishu_bot_app_secret,
+            },
+            retries=1,
+        )
+        token = data.get("tenant_access_token")
+        if not token:
+            raise FeishuApiError(f"获取飞书 tenant_access_token 失败: {data}")
+        self._tenant_access_token = token
+        self._tenant_access_token_expires_at = time.time() + int(data.get("expire", 7200))
+        return token
+
     def exchange_code_for_user_token(self, code: str) -> Dict[str, Any]:
         app_access_token = self.get_app_access_token()
         data = self._request_json(
@@ -180,6 +204,12 @@ class FeishuClient:
             "Content-Type": "application/json; charset=utf-8",
         }
 
+    def _tenant_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.get_tenant_access_token()}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
     def create_document(self, title: str) -> Dict[str, str]:
         data = self._request_json(
             "POST",
@@ -216,5 +246,28 @@ class FeishuClient:
             payload=block_payload,
             headers=self._user_headers(),
             allow_refresh=True,
+        )
+        return data.get("data", {}) or {}
+
+    def send_message(
+        self,
+        *,
+        receive_id_type: str,
+        receive_id: str,
+        msg_type: str,
+        content: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if receive_id_type not in {"open_id", "chat_id"}:
+            raise FeishuApiError(f"Unsupported receive_id_type: {receive_id_type}")
+        data = self._request_json(
+            "POST",
+            f"/im/v1/messages?receive_id_type={receive_id_type}",
+            payload={
+                "receive_id": receive_id,
+                "msg_type": msg_type,
+                "content": json.dumps(content, ensure_ascii=False),
+            },
+            headers=self._tenant_headers(),
+            retries=2,
         )
         return data.get("data", {}) or {}

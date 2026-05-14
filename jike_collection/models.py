@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
@@ -19,12 +20,15 @@ TYPE_LABELS = {
 
 CJK_BLOCK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 WHITESPACE_RE = re.compile(r"\s+")
-LATIN_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+LATIN_TOKEN_RE = re.compile(r"[A-Za-z0-9_/-]+")
+URL_RE = re.compile(r"https?://\S+")
 
 
 @dataclass
 class NormalizedItem:
     item_id: str
+    source_type: str
+    source_item_id: str
     item_type: str
     title: str
     content: str
@@ -32,22 +36,62 @@ class NormalizedItem:
     link_url: str
     author_screen_name: str
     author_username: str
+    source_author: str
+    source_channel: str
     topic_id: str
     topic_name: str
     source_url: str
+    canonical_url: str
     created_at: str
+    published_at: str
+    collected_at: str
     first_seen_at: str
     last_seen_at: str
     has_images: int
     has_video: int
     has_audio: int
     domain: str
+    tags_json: str
+    metadata_json: str
     search_blob: str
     raw_json: str
 
 
+def make_item_id(source_type: str, source_item_id: str) -> str:
+    clean_source = clean_text(source_type) or "unknown"
+    clean_item_id = clean_text(source_item_id) or "missing"
+    if clean_source == "jike":
+        return clean_item_id
+    return f"{clean_source}:{clean_item_id}"
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def parse_iso_datetime(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    candidate = value.strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def format_iso_datetime(value: Optional[datetime]) -> str:
+    if value is None:
+        return ""
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def utc_days_ago_iso(days: int) -> str:
+    return format_iso_datetime(datetime.now(timezone.utc) - timedelta(days=days))
 
 
 def clean_text(value: Any) -> str:
@@ -56,8 +100,7 @@ def clean_text(value: Any) -> str:
     if not isinstance(value, str):
         value = str(value)
     value = value.replace("\r\n", "\n").replace("\r", "\n")
-    value = WHITESPACE_RE.sub(" ", value).strip()
-    return value
+    return WHITESPACE_RE.sub(" ", value).strip()
 
 
 def clean_body_text(value: Any) -> str:
@@ -91,6 +134,35 @@ def truncate_text(text: str, limit: int = 80) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def content_hash(*parts: str) -> str:
+    joined = "\n".join(part for part in parts if part)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def build_dedupe_key(title: str, content: str) -> str:
+    def normalize(value: str) -> str:
+        text = clean_text(value).lower()
+        text = URL_RE.sub(" ", text)
+        text = WHITESPACE_RE.sub(" ", text).strip()
+        return text
+
+    normalized_title = normalize(title)
+    normalized_content = normalize(content)
+    core = normalized_content or normalized_title
+    if len(core) > 240:
+        core = core[:240]
+    return hashlib.sha256(f"{normalized_title}\n{core}".encode("utf-8")).hexdigest()
+
+
+def serialize_json(value: Any, *, default: str) -> str:
+    if value is None:
+        return default
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return default
 
 
 def _best_link(item: Dict[str, Any]) -> str:
@@ -214,18 +286,28 @@ def normalize_item(item: Dict[str, Any], seen_at: Optional[str] = None) -> Norma
     topic = item.get("topic") or {}
     target = item.get("target") or {}
 
+    source_item_id = str(item["id"])
     link_title = clean_text(link_info.get("title"))
     link_url = _best_link(item)
     author_screen_name = clean_text(user.get("screenName"))
     author_username = clean_text(user.get("username"))
+    source_author = author_screen_name or author_username
     topic_id = clean_text(topic.get("id"))
     topic_name = clean_text(topic.get("content"))
     created_at = clean_text(item.get("createdAt")) or now
+    collected_at = clean_text(item.get("collectTime")) or now
     title = _extract_title(item, content)
     has_images = 1 if item.get("pictures") or target.get("pictures") else 0
     has_video = 1 if item.get("video") or (link_info.get("video") if link_info else None) else 0
     has_audio = 1 if item.get("audio") or (link_info.get("audio") if link_info else None) else 0
     domain = _extract_domain(link_url)
+    source_url = clean_text(item.get("shareUrl")) or link_url
+    canonical_url = link_url or source_url
+    metadata = {
+        "collectTime": clean_text(item.get("collectTime")),
+        "shareUrl": clean_text(item.get("shareUrl")),
+    }
+    tags = [topic_name] if topic_name else []
 
     search_blob = build_search_blob(
         title,
@@ -236,10 +318,13 @@ def normalize_item(item: Dict[str, Any], seen_at: Optional[str] = None) -> Norma
         author_username,
         topic_name,
         domain,
+        "即刻收藏",
     )
 
     return NormalizedItem(
-        item_id=str(item["id"]),
+        item_id=make_item_id("jike", source_item_id),
+        source_type="jike",
+        source_item_id=source_item_id,
         item_type=clean_text(item.get("type")) or "UNKNOWN",
         title=title,
         content=content,
@@ -247,16 +332,23 @@ def normalize_item(item: Dict[str, Any], seen_at: Optional[str] = None) -> Norma
         link_url=link_url,
         author_screen_name=author_screen_name,
         author_username=author_username,
+        source_author=source_author,
+        source_channel=topic_name,
         topic_id=topic_id,
         topic_name=topic_name,
-        source_url=link_url,
+        source_url=source_url,
+        canonical_url=canonical_url,
         created_at=created_at,
+        published_at=created_at,
+        collected_at=collected_at,
         first_seen_at=now,
         last_seen_at=now,
         has_images=has_images,
         has_video=has_video,
         has_audio=has_audio,
         domain=domain,
+        tags_json=serialize_json(tags, default="[]"),
+        metadata_json=serialize_json(metadata, default="{}"),
         search_blob=search_blob,
         raw_json=json.dumps(item, ensure_ascii=False, sort_keys=True),
     )
