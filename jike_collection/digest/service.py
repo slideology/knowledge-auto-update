@@ -88,6 +88,7 @@ class DailyDigestService:
         aihot_rows = self.db.fetch_items_in_window("aihot", "published_at", start_iso, end_iso)
 
         try:
+            llm_error = ""
             if self.llm.is_configured():
                 prompt = (
                     f"请基于下面两组材料，为 {digest_date_str} 生成一份中文 Markdown 日报。\n\n"
@@ -105,17 +106,24 @@ class DailyDigestService:
                     f"你的新增收藏（{len(jike_rows)} 条）：\n{self._format_item_lines(jike_rows, '即刻收藏')}\n\n"
                     f"AIHOT 热点（{len(aihot_rows)} 条）：\n{self._format_item_lines(aihot_rows, 'AIHOT 精选')}\n"
                 )
-                summary_markdown = self.llm.chat(
-                    [
-                        ChatMessage(
-                            role="system",
-                            content="你是一个内容分析助手，负责把私人收藏与外部 AI 热点做对照总结。",
-                        ),
-                        ChatMessage(role="user", content=prompt),
-                    ],
-                    temperature=0.2,
-                    max_tokens=1600,
-                )
+                try:
+                    summary_markdown = self.llm.chat(
+                        [
+                            ChatMessage(
+                                role="system",
+                                content="你是一个内容分析助手，负责把私人收藏与外部 AI 热点做对照总结。",
+                            ),
+                            ChatMessage(role="user", content=prompt),
+                        ],
+                        temperature=0.2,
+                        max_tokens=1600,
+                    )
+                except Exception as exc:
+                    llm_error = str(exc)
+                    summary_markdown = self._fallback_summary(digest_date_str, jike_rows, aihot_rows)
+                    summary_markdown += (
+                        "\n\n> 备注：LLM 摘要服务临时不可用，本次使用基础摘要模板。"
+                    )
             else:
                 summary_markdown = self._fallback_summary(digest_date_str, jike_rows, aihot_rows)
 
@@ -135,7 +143,7 @@ class DailyDigestService:
                 jike_count=len(jike_rows),
                 aihot_count=len(aihot_rows),
                 summary_markdown=summary_markdown,
-                note="digest generated",
+                note="digest generated with fallback" if llm_error else "digest generated",
             )
         except Exception as exc:
             error_message = str(exc)

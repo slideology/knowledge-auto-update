@@ -4,14 +4,16 @@
 
 ## 当前项目状态快照
 
-截至 `2026-05-14`：
+截至 `2026-05-15`：
 
 - 本地知识库事实源是 `data/jike_collection.db`，飞书文档只是浏览镜像。
-- 当前数据规模约为 `2060` 条：`jike=1838`，`aihot=222`。
-- KB chunks 约为 `2057`，其中 `jike=1835`，`aihot=222`。
-- embeddings 约为 `2056`，仍有少量即刻历史条目未完全补齐。
+- 当前数据规模约为 `2120` 条：`jike=1848`，`aihot=272`。
+- KB chunks 约为 `2117`，其中 `jike=1845`，`aihot=272`。
+- embeddings 约为 `2116`，仍有少量即刻历史条目未完全补齐。
 - 每日任务通过本机 `launchd` 在每天 `10:00` 执行 `python3 -m jike_collection run-daily`。
-- 最近的日报链路是可用的，飞书 webhook 负责发送日报；飞书 bot 回调若使用 ngrok，地址可能随进程重启变化。
+- 最近的日报链路是可用的，`2026-05-14` 日报已在 `2026-05-15` 补发成功；飞书 webhook 负责发送日报。
+- 日报生成已支持 LLM 失败兜底：APIMart/LLM 临时 5xx 或通道不可用时，使用基础摘要模板继续生成。
+- 飞书 bot 回调若使用 ngrok，地址可能随进程重启变化。
 - 飞书文档镜像仍可能遇到 `too many children in block`，不要把文档镜像当作问答主链路。
 
 如果这些数字对当前任务重要，先运行 `python3 -m jike_collection stats` 和相关 SQLite 查询刷新，不要只依赖本快照。
@@ -84,7 +86,32 @@ curl -s http://127.0.0.1:9444/json/version
 
 不要操作用户的普通 Chrome 窗口；需要飞书后台、即刻页面或登录态浏览器时，只使用 `Chrome Canary + 127.0.0.1:9444`，除非用户明确改口。
 
-## 3. 构建/测试/lint 命令
+## 3. 其他项目访问本地知识库
+
+其他 Codex 项目需要查询用户的即刻收藏或 AIHOT 本地知识库时，优先调用本项目 CLI。不要直接读写 `data/jike_collection.db`。
+
+推荐问答：
+
+```bash
+(cd /Users/dahuang/CascadeProjects/knowledge-auto-update && python3 -m jike_collection ask "问题")
+```
+
+推荐关键词搜索：
+
+```bash
+(cd /Users/dahuang/CascadeProjects/knowledge-auto-update && python3 -m jike_collection search "关键词" --source all)
+```
+
+限定来源：
+
+```bash
+(cd /Users/dahuang/CascadeProjects/knowledge-auto-update && python3 -m jike_collection ask "问题" --source jike)
+(cd /Users/dahuang/CascadeProjects/knowledge-auto-update && python3 -m jike_collection ask "问题" --source aihot)
+```
+
+如果需要把这段能力写入其他仓库的 `AGENTS.md`，只复制上述调用方式即可；不要复制本项目 `.env`、token 或数据库文件。
+
+## 4. 构建/测试/lint 命令
 
 本仓库目前没有 `pyproject.toml`、`requirements.txt`、`pytest` 或 `ruff` 配置；不要凭空引入新的工具链。
 
@@ -123,7 +150,7 @@ python3 -m jike_collection digest --date YYYY-MM-DD --send
 python3 -m jike_collection feishu-sync-doc --limit 1
 ```
 
-## 4. 代码风格约定
+## 5. 代码风格约定
 
 - 使用 Python 标准库优先，保持当前轻依赖风格。
 - 新模块统一使用 `from __future__ import annotations`。
@@ -134,9 +161,10 @@ python3 -m jike_collection feishu-sync-doc --limit 1
 - CLI 输出保持简洁可读，失败时返回非 0 exit code。
 - 网络调用要设置超时，异常要转成清晰的错误摘要，避免静默跳过。
 - 写入飞书、发送 webhook、跑全量同步等有外部副作用的命令，改动后优先用小 `--limit` 或指定日期做验证。
+- 日报生成应尽量可降级；LLM 调用失败时保留基础摘要 fallback，不要因为单个模型通道异常导致整条日报丢失。
 - 代码注释只解释不直观的业务约束，例如 API 限流、飞书 block 限制、SQLite 迁移原因。
 
-## 5. 提交前检查项
+## 6. 提交前检查项
 
 提交前至少执行：
 
@@ -183,7 +211,7 @@ curl -s http://127.0.0.1:8788/healthz
 - 工作区可能已有用户或其他 Agent 的未提交改动；只提交本次任务相关文件。
 - 如果用户要求“推送到 git”，先用 `git status --short` 和 `.gitignore` 确认不会提交本地敏感文件，再提交并通过 SSH remote 推送。
 
-## 6. 禁止随意改动的文件
+## 7. 禁止随意改动的文件
 
 以下文件和目录包含敏感数据、运行状态或本机调度配置，除非任务明确要求，否则不要修改、删除、格式化或重建：
 
